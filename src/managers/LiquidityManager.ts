@@ -30,7 +30,7 @@ import {
 
 import { searcherClient } from 'jito-ts/dist/sdk/block-engine/searcher';
 import { Bundle } from 'jito-ts/dist/sdk/block-engine/types';
-import { Logger } from './utils';
+import { Logger } from '../core/utils';
 import { BN } from 'bn.js';
 import bs58 from 'bs58';
 

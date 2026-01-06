@@ -15,7 +15,7 @@ import {
     createInitializeAccountInstruction,
     TOKEN_PROGRAM_ID
 } from '@solana/spl-token';
-import { Logger } from './utils';
+import { Logger } from '../core/utils';
 import { BN } from 'bn.js';
 
 // OpenBook Program ID (Mainnet)

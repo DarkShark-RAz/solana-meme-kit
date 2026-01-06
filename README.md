@@ -1,87 +1,79 @@
 # solana-meme-kit
 
-**The All-in-One SDK for launching Solana Tokens.**
+**The Universal SDK for launching Solana Tokens.**
 
 [![npm version](https://img.shields.io/npm/v/solana-meme-kit.svg)](https://www.npmjs.com/package/solana-meme-kit)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A unified, open-source TypeScript SDK that abstracts the complexity of Solana token launches. It provides a single interface to handle Token Minting, "Low-Cost" OpenBook Market creation, and Raydium Liquidity provisioning with Jito Bundles (Anti-Snipe).
-
+A unified, open-source TypeScript SDK that abstracts the complexity of Solana token launches. It provides a **Strategy Pattern** allowing you to choose different DEX backends for liquidity provision with a single code path.
 
 ## ✨ Core Features
 
+- **Protocol:Strategy Selection**: Choose your DEX backend using `protocol:strategy` format.
 - **Token Minting**: One-line minting with metadata upload via Metaplex Umi.
-- **OpenBook Markets**:
-  - Automatically calculates rent-exempt minimums.
-  - Supports **"Low-Cost"** configuration (Event Queue: 128, Request Queue: 63, Orderbook: 201) to save ~2.6 SOL per launch.
-  - Uses the official OpenBook V1 Program ID.
-- **Liquidity Management**:
-  - Integrated with **Raydium SDK V2**.
-  - **Jito Bundle Support**: Atomically executes `InitPool` + `AddLiquidity` + `Swap` + `Tip` to prevent sniping (Mainnet only).
+- **OpenBook Markets**: Supports automated low-cost market creation.
 - **Security**: Built-in helpers to revoke Mint and Freeze authorities.
+- **Standardized Interface**: Switch DEXs without changing your business logic.
 
-## 📦 Installation
+## 📊 Strategy Comparison
 
-```bash
-bun add solana-meme-kit
-# or
-npm install solana-meme-kit
-```
+| Strategy           | Cost (est)     | Anti-Snipe | Features                             |
+| :----------------- | :------------- | :--------- | :----------------------------------- |
+| **`meteora:dlmm`** | ~0.02 SOL      | ✅ High    | Dynamic fees, concentrated liquidity |
+| **`raydium:cpmm`** | ~0.15 SOL      | ⚠️ Medium  | Modern CPMM, no OpenBook needed      |
+| **`raydium:amm`**  | ~0.2 - 2.8 SOL | ⚠️ Low     | Legacy AMM, maximum compatibility    |
 
 ## 💻 Usage
 
-### Basic Launch
+### Basic Launch (Meteora DLMM - Default)
 
 ```typescript
-import { MemeKit } from 'solana-meme-kit';
+import { MemeKit } from "solana-meme-kit";
 
-// 1. Initialize
 const kit = new MemeKit({
-  rpcUrl: process.env.RPC_URL!,
-  privateKey: process.env.PRIVATE_KEY!,
-  cluster: 'mainnet' // 'mainnet' | 'devnet'
+  rpcUrl: "https://api.mainnet-beta.solana.com",
+  privateKey: "YOUR_PRIVATE_KEY",
+  cluster: "mainnet",
 });
 
-// 2. Launch
 const result = await kit.launch({
-  // Token
-  name: 'Cool Token',
-  symbol: 'COOL',
-  image: 'https://arweave.net/metadata-uri',
+  name: "Super Gem",
+  symbol: "SGEM",
+  image: "https://arweave.net/metadata",
   supply: 1_000_000_000,
-  
-  // Liquidity
   solLiquidityAmount: 5,
   tokenLiquidityAmount: 800_000_000,
-  
-  // Advanced Config
-  marketMode: 'low-cost', // Optimizes rent costs
-  jitoTipAmount: 0.01,
+  dex: "meteora:dlmm", // Choose strategy here
 });
 
-console.log('Launch Bundle:', result.bundleId);
+console.log(`Token: ${result.mint}, Pool: ${result.poolId}`);
 ```
 
 ## 🛠️ Architecture
 
-The SDK is composed of three main managers which can also be used independently:
-
-- **`TokenManager`**: Wraps `@metaplex-foundation/umi` for minting and authority management.
-- **`MarketManager`**: Wraps `@openbook-dex/openbook` for market ID generation.
-- **`LiquidityManager`**: Wraps `@raydium-io/raydium-sdk-v2` and `jito-ts` for pool actions.
+```
+src/
+├── core/               # Main SDK and utilities
+├── managers/           # Modular components (Token, Market, etc)
+└── strategies/         # DEX-specific implementations
+    ├── meteora/        # Meteora DLMM logic
+    └── raydium/        # Raydium CPMM & AMM logic
+```
 
 ## 🧪 Development
 
 ```bash
-# Install dependencies
 bun install
-
-# Run Tests
-bun test
-
-# Build
 bun run build
+bun test
 ```
+
+## 🚀 Roadmap
+
+- [x] Meteora DLMM Integration
+- [x] Raydium CPMM Integration
+- [x] Raydium AMM (Legacy) Integration
+- [ ] Jito Bundle Support (Mainnet)
 
 ## 📄 License
 

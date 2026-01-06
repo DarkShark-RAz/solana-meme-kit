@@ -15,7 +15,7 @@ import {
 import { fromWeb3JsKeypair, toWeb3JsKeypair } from '@metaplex-foundation/umi-web3js-adapters';
 import { Connection, Keypair, PublicKey } from '@solana/web3.js';
 import { setAuthority, AuthorityType } from '@solana/spl-token';
-import { Logger } from './utils';
+import { Logger } from '../core/utils';
 
 export interface TokenConfig {
     name: string;

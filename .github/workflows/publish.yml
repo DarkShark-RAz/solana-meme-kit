@@ -18,34 +18,26 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20.x"
-          # We don't set registry-url here globally to allow OIDC to work if NPM_TOKEN is missing
 
       - uses: oven-sh/setup-bun@v1
         with:
           bun-version: latest
 
-      - name: Check if version changed
+      - name: Check version and publication status
         id: check
         shell: bash
         run: |
           VERSION=$(node -p "require('./package.json').version")
           NAME=$(node -p "require('./package.json').name")
           
-          # 1. Check if version was bumped in this push
-          PREV_VERSION=$(git show HEAD^:package.json | node -p "JSON.parse(fs.readFileSync(0)).version" 2>/dev/null || echo "0.0.0")
+          echo "Checking version: $NAME@$VERSION"
           
-          if [ "$VERSION" = "$PREV_VERSION" ]; then
-            echo "Version has not changed ($VERSION). Skipping publish."
-            echo "should_publish=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # 2. Check if version exists on npm
-          if npm view $NAME@$VERSION version >/dev/null 2>&1; then
-            echo "Version $VERSION is already published on npm. Skipping."
+          # Check if this version is already on npm
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "Version $VERSION already exists on npm. Skipping publication."
             echo "should_publish=false" >> $GITHUB_OUTPUT
           else
-            echo "New version $VERSION detected."
+            echo "Version $VERSION is new."
             echo "should_publish=true" >> $GITHUB_OUTPUT
             echo "version=$VERSION" >> $GITHUB_OUTPUT
           fi
@@ -57,27 +49,27 @@ jobs:
           bun install
           bun run build
           
-          if [ -n "$NODE_AUTH_TOKEN" ]; then
-            echo "Using NPM_TOKEN for authentication..."
-            # Create a temporary .npmrc for token auth
-            echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > .npmrc
+          # Prefer OIDC Trusted Publishing (provenance is generated automatically)
+          # If a secret NPM_TOKEN is provided, we fall back to it
+          if [ -n "$NPM_TOKEN_SECRET" ]; then
+            echo "Found NPM_TOKEN secret. Using token-based authentication."
+            echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN_SECRET}" > .npmrc
             npm publish --provenance --access public
           else
-            echo "NPM_TOKEN not found. Attempting OIDC Trusted Publishing..."
-            echo "Ensure you have linked GitHub in npmjs.org -> Settings -> Publishing -> Trusted Publishers"
-            # Unset variables that might confuse npm into thinking token auth is required
-            unset NODE_AUTH_TOKEN
+            echo "No NPM_TOKEN secret found. Using OIDC Trusted Publishing."
             npm publish --provenance --access public
           fi
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN_SECRET: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
         if: steps.check.outputs.should_publish == 'true'
+        shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION=${{ steps.check.outputs.version }}
+          echo "Creating GitHub Release for v$VERSION"
           gh release create "v$VERSION" \
             --title "v$VERSION" \
             --generate-notes

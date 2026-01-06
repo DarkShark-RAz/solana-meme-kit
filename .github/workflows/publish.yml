@@ -4,12 +4,13 @@ on:
     branches: [main]
   workflow_dispatch: {}
 
+permissions:
+  contents: write
+  id-token: write
+
 jobs:
   publish:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,46 +31,26 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           NAME=$(node -p "require('./package.json').name")
           
-          echo "Checking version: $NAME@$VERSION"
-          
           # Check if this version is already on npm
           if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
-            echo "Version $VERSION already exists on npm. Skipping publication."
+            echo "Version $VERSION already exists on npm. Skipping."
             echo "should_publish=false" >> $GITHUB_OUTPUT
           else
-            echo "Version $VERSION is new."
             echo "should_publish=true" >> $GITHUB_OUTPUT
             echo "version=$VERSION" >> $GITHUB_OUTPUT
           fi
 
       - name: Build and Publish
         if: steps.check.outputs.should_publish == 'true'
-        shell: bash
         run: |
           bun install
           bun run build
-          
-          # Prefer OIDC Trusted Publishing (provenance is generated automatically)
-          # If a secret NPM_TOKEN is provided, we fall back to it
-          if [ -n "$NPM_TOKEN_SECRET" ]; then
-            echo "Found NPM_TOKEN secret. Using token-based authentication."
-            echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN_SECRET}" > .npmrc
-            npm publish --provenance --access public
-          else
-            echo "No NPM_TOKEN secret found. Using OIDC Trusted Publishing."
-            npm publish --provenance --access public
-          fi
-        env:
-          NPM_TOKEN_SECRET: ${{ secrets.NPM_TOKEN }}
+          npm publish --provenance --access public
 
       - name: Create GitHub Release
         if: steps.check.outputs.should_publish == 'true'
-        shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION=${{ steps.check.outputs.version }}
-          echo "Creating GitHub Release for v$VERSION"
-          gh release create "v$VERSION" \
-            --title "v$VERSION" \
-            --generate-notes
+          gh release create "v$VERSION" --title "v$VERSION" --generate-notes

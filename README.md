@@ -73,7 +73,7 @@ bun test
 - [x] Meteora DLMM Integration
 - [x] Raydium CPMM Integration
 - [x] Raydium AMM (Legacy) Integration
-- [ ] Jito Bundle Support (Mainnet)
+- [x] Jito Bundle Support (Mainnet)
 
 ## 📄 License
 

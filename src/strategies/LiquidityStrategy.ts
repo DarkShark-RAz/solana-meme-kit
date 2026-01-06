@@ -17,7 +17,12 @@ export interface LaunchOptions {
 
     // Anti-Snipe (mainnet only)
     devBuySolAmount?: number;
-    jitoTipAmount?: number;
+    jitoTip?: number; // Tip in SOL for bundling
+    
+    meteoraOptions?: {
+        activationPoint?: number; // Timestamp or slot
+        activationType?: 'timestamp' | 'slot';
+    };
 
     // Legacy / Specifics
     marketMode?: 'low-cost' | 'standard'; // For Raydium AMM

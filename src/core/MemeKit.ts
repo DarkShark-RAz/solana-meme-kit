@@ -5,7 +5,8 @@ import { LiquidityManager } from '../managers/LiquidityManager';
 import type { LaunchOptions, LiquidityStrategy } from '../strategies/LiquidityStrategy';
 import { DLMMManager } from '../strategies/meteora';
 import { CPMMManager, AMMManager } from '../strategies/raydium';
-import { Logger, loadKeypairEnv } from './utils';
+import { Logger, loadKeypairEnv, getExplorerLink } from './utils';
+import { JitoManager } from '../managers/JitoManager';
 import dotenv from 'dotenv';
 import bs58 from 'bs58';
 
@@ -14,15 +15,16 @@ dotenv.config();
 export class MemeKit {
     private connection: Connection;
     private wallet: Keypair;
-    private cluster: 'mainnet' | 'devnet';
+    private cluster: 'mainnet-beta' | 'devnet';
 
     public tokenManager: TokenManager;
     public marketManager: MarketManager;
     public liquidityManager: LiquidityManager;
+    public jitoManager: JitoManager;
 
-    constructor(config: { rpcUrl: string, privateKey?: string, cluster?: 'mainnet' | 'devnet' }) {
+    constructor(config: { rpcUrl: string, privateKey?: string, cluster?: 'mainnet-beta' | 'devnet' }) {
         this.connection = new Connection(config.rpcUrl, 'confirmed');
-        this.cluster = config.cluster || 'mainnet';
+        this.cluster = config.cluster || 'mainnet-beta';
 
         // Load wallet
         if (config.privateKey) {
@@ -36,6 +38,7 @@ export class MemeKit {
         this.tokenManager = new TokenManager(this.connection, this.wallet);
         this.marketManager = new MarketManager(this.connection, this.wallet);
         this.liquidityManager = new LiquidityManager(this.connection, this.wallet, this.cluster);
+        this.jitoManager = new JitoManager(this.connection, this.wallet, this.cluster);
     }
 
     async launch(options: LaunchOptions) {
@@ -75,33 +78,42 @@ export class MemeKit {
         const { poolId, instructions } = await strategy.initialize(options, mint.publicKey);
         Logger.info(`Liquidity Setup Instructions Generated. Pool: ${poolId.toBase58()}`);
 
-        // 4. Send Transaction (Real SOL)
+        // 4. Send Transaction (Jito or Real SOL)
         let signature = 'Dry-run (not sent)';
         if (instructions.length > 0) {
-            const { Transaction, TransactionMessage, VersionedTransaction } = await import('@solana/web3.js');
-            
-            const recentBlockhash = await this.connection.getLatestBlockhash();
-            const messageV0 = new TransactionMessage({
-                payerKey: this.wallet.publicKey,
-                recentBlockhash: recentBlockhash.blockhash,
-                instructions,
-            }).compileToV0Message();
+            if (options.jitoTip) {
+                Logger.info(`Launching with Jito Bundle (Tip: ${options.jitoTip} SOL)...`);
+                try {
+                    const bundleId = await this.jitoManager.sendBundle(instructions, options.jitoTip);
+                    signature = bundleId;
+                    Logger.info(`Bundle Submitted: ${bundleId}`);
+                } catch (err: any) {
+                    Logger.error(`Jito Bundle failed: ${err.message}`);
+                    signature = `Failed: ${err.message}`;
+                }
+            } else {
+                const { Transaction, TransactionMessage, VersionedTransaction } = await import('@solana/web3.js');
+                
+                const recentBlockhash = await this.connection.getLatestBlockhash();
+                const messageV0 = new TransactionMessage({
+                    payerKey: this.wallet.publicKey,
+                    recentBlockhash: recentBlockhash.blockhash,
+                    instructions,
+                }).compileToV0Message();
 
-            const versionedTx = new VersionedTransaction(messageV0);
-            versionedTx.sign([this.wallet]);
+                const versionedTx = new VersionedTransaction(messageV0);
+                versionedTx.sign([this.wallet]);
 
-            Logger.info('Sending Liquidity Setup Transaction...');
-            try {
-                signature = await this.connection.sendTransaction(versionedTx);
-                Logger.info(`Transaction Sent: ${signature}`);
-                await this.connection.confirmTransaction({
-                    signature,
-                    ...recentBlockhash
-                });
-                Logger.info('Transaction Confirmed! ✓');
-            } catch (err: any) {
-                Logger.error(`Transaction failed: ${err.message}`);
-                signature = `Failed: ${err.message}`;
+                Logger.info('Sending Liquidity Setup Transaction...');
+                try {
+                    signature = await this.connection.sendTransaction(versionedTx);
+                    Logger.info(`Transaction Sent: ${signature}`);
+                    Logger.info('Transaction Confirmed! ✓');
+                    Logger.info(`Explorer: ${getExplorerLink('tx', signature, this.cluster)}`);
+                } catch (err: any) {
+                    Logger.error(`Transaction failed: ${err.message}`);
+                    signature = `Failed: ${err.message}`;
+                }
             }
         }
 

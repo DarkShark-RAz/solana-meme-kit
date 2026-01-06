@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'bun:test';
 import { Connection, Keypair, PublicKey } from '@solana/web3.js';
-import { LBCLMM, deriveLbPair, LBCLMM_PROGRAM_IDS } from '@meteora-ag/dlmm-sdk';
+import DLMM, { deriveLbPair, LBCLMM_PROGRAM_IDS } from '@meteora-ag/dlmm';
 import { BN } from 'bn.js';
 import { Logger, loadKeypairEnv } from '../src/core/utils';
 import dotenv from 'dotenv';
@@ -20,8 +20,8 @@ describe('Meteora DLMM Strategy', () => {
         }
 
         const tokenX = new PublicKey('So11111111111111111111111111111111111111112'); // WSOL
-        const tokenY = Keypair.generate().publicKey;
-        const binStep = new BN(60);
+        const tokenY = new PublicKey('4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU'); // Devnet USDC
+        const binStep = new BN(100);
         const activeId = new BN(0);
         
         const [poolPubkey] = deriveLbPair(tokenX, tokenY, binStep, DLMM_PROGRAM_ID);
@@ -30,13 +30,18 @@ describe('Meteora DLMM Strategy', () => {
         
         // Build instructions (dry-run)
         try {
-            const createTx = await LBCLMM.createLbPair(
+            const createTx = await DLMM.createCustomizablePermissionlessLbPair(
                 connection,
-                wallet.publicKey,
+                binStep,
                 tokenX,
                 tokenY,
                 activeId,
-                binStep,
+                new BN(100), // feeBps
+                0, // activationType (timestamp)
+                false, // hasAlphaVault
+                wallet.publicKey,
+                undefined, // activationPoint
+                false, // creatorPoolOnOffControl
                 { cluster: 'devnet' }
             );
             expect(createTx.instructions.length).toBeGreaterThan(0);

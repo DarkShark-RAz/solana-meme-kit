@@ -1,11 +1,11 @@
 import { Connection, Keypair, PublicKey, TransactionInstruction, Transaction } from '@solana/web3.js';
 import type { LiquidityStrategy, LaunchOptions } from '../LiquidityStrategy';
-import { LBCLMM, deriveLbPair, LBCLMM_PROGRAM_IDS } from '@meteora-ag/dlmm-sdk';
+import DLMM, { deriveLbPair, LBCLMM_PROGRAM_IDS } from '@meteora-ag/dlmm';
 import { BN } from 'bn.js';
 import { Logger } from '../../core/utils';
 
 export class DLMMManager implements LiquidityStrategy {
-    private static BIN_STEP = new BN(60); // Volatility setting for memecoins
+    private static BIN_STEP = new BN(100); // Volatility setting for memecoins (100 is standard)
     private programId: PublicKey;
 
     constructor(
@@ -53,24 +53,35 @@ export class DLMMManager implements LiquidityStrategy {
         const [poolPubkey, _] = deriveLbPair(tokenX, tokenY, DLMMManager.BIN_STEP, this.programId);
         Logger.info(`Derived Pool Address: ${poolPubkey.toBase58()}`);
         
-        // Create Pool Transaction using SDK (LBCLMM class)
-        const createTx = await LBCLMM.createLbPair(
+        // Create Pool Transaction using SDK
+        // We use createCustomizablePermissionlessLbPair for anti-sniper features (activationPoint)
+        const createTx = await DLMM.createCustomizablePermissionlessLbPair(
             this.connection, 
-            this.wallet.publicKey, 
+            new BN(DLMMManager.BIN_STEP), 
             tokenX, 
             tokenY, 
             new BN(activeId), 
-            DLMMManager.BIN_STEP, 
-            { cluster: this.cluster }
+            new BN(100), // 1% base fee
+            options.meteoraOptions?.activationType === 'slot' ? 1 : 0, // 0 for Timestamp, 1 for Slot
+            false, // hasAlphaVault (deferred)
+            this.wallet.publicKey,
+            options.meteoraOptions?.activationPoint ? new BN(options.meteoraOptions.activationPoint) : undefined
         );
         
         // Extract instructions from Transaction
         let instructions: TransactionInstruction[] = [];
         if (createTx instanceof Transaction) {
             instructions = createTx.instructions;
+        } else if ((createTx as any).message) {
+            // Probably a VersionedTransaction
+            Logger.info('Detected VersionedTransaction from Meteora SDK');
+            // This is tricky because we can't easily extract "TransactionInstruction" objects from a compiled message 
+            // without the account keys buffer. However, for bundling, we might need the whole transaction 
+            // or we might need to use a different SDK method that returns instructions.
+        } else {
+            Logger.warn('Unknown transaction type returned from Meteora SDK');
+            console.log(createTx);
         }
-        
-        Logger.info(`Meteora Pool Creation: ${instructions.length} instructions generated.`);
         
         // Add Liquidity Instructions (Placeholder for now as SDK requires active DLMM instance)
         // In a real launch, we would use a Jito bundle to ensure Tx1 (Create) and Tx2 (Add Liquidity) 

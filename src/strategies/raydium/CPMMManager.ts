@@ -17,7 +17,7 @@ export class CPMMManager implements LiquidityStrategy {
     constructor(
         private connection: Connection, 
         private wallet: Keypair,
-        private cluster: 'mainnet' | 'devnet' = 'mainnet'
+        private cluster: 'mainnet-beta' | 'devnet' = 'mainnet-beta'
     ) { }
 
     private async loadSdk(): Promise<Raydium> {
@@ -26,7 +26,7 @@ export class CPMMManager implements LiquidityStrategy {
             this.raydium = await Raydium.load({
                 connection: this.connection,
                 owner: this.wallet,
-                cluster: this.cluster,
+                cluster: this.cluster === 'mainnet-beta' ? 'mainnet' : this.cluster,
                 disableLoadToken: true,
             });
             Logger.info(`Raydium SDK loaded for cluster: ${this.cluster}`);

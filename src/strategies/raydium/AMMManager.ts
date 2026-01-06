@@ -17,7 +17,7 @@ export class AMMManager implements LiquidityStrategy {
         private connection: Connection, 
         private wallet: Keypair,
         private marketManager: MarketManager,
-        private cluster: 'mainnet' | 'devnet' = 'mainnet'
+        private cluster: 'mainnet-beta' | 'devnet' = 'mainnet-beta'
     ) { }
 
     private async loadSdk(): Promise<Raydium> {
@@ -25,7 +25,7 @@ export class AMMManager implements LiquidityStrategy {
             this.raydium = await Raydium.load({
                 connection: this.connection,
                 owner: this.wallet,
-                cluster: this.cluster,
+                cluster: this.cluster === 'mainnet-beta' ? 'mainnet' : this.cluster,
                 disableLoadToken: true,
             });
         }

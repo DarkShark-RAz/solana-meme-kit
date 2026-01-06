@@ -6,27 +6,25 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # Required for Trusted Publishing
     steps:
       - uses: actions/checkout@v4
       # Setup .npmrc file to publish to npm
       - uses: actions/setup-node@v4
         with:
-          node-version: '20.x'
-          registry-url: 'https://registry.npmjs.org'
-      
+          node-version: "20.x"
+          registry-url: "https://registry.npmjs.org"
+
       - uses: oven-sh/setup-bun@v1
         with:
           bun-version: latest
 
       - run: bun install
       - run: bun test
-      # Build if necessary (tsc), but for now we publish ts directly or we should add a build step?
-      # Usually we publish compiled JS + .d.ts.
-      # Let's add a build script to package.json to be safe, but for now we just publish.
-      # If we publish TS, users need to compile it. Standard is to publish JS.
-      # Let's assume we publish as is for specific TS/Bun consumers OR add a build step.
-      # For a "kit" like this, pre-compiling is better. I'll add a build step next.
-      
-      - run: npm publish --access public
+      - run: bun run build
+
+      - run: npm publish --provenance --access public
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }} # Fallback if OIDC fails, but OIDC uses internal magic

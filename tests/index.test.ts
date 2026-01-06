@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { MemeKit } from '../src/index';
+import { MemeKit } from '../src';
 
 describe('MemeKit SDK', () => {
     it('should export MemeKit class', () => {

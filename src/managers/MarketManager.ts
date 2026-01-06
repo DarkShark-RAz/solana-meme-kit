@@ -15,7 +15,7 @@ import {
     createInitializeAccountInstruction,
     TOKEN_PROGRAM_ID
 } from '@solana/spl-token';
-import { Logger } from './utils';
+import { Logger } from '../core/utils';
 import { BN } from 'bn.js';
 
 // OpenBook Program ID (Mainnet)
@@ -23,7 +23,11 @@ import { BN } from 'bn.js';
 export const OPENBOOK_PROGRAM_ID = new PublicKey('srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX');
 
 export class MarketManager {
-    constructor(private connection: Connection, private wallet: Keypair) { }
+    constructor(
+        private connection: Connection, 
+        private wallet: Keypair,
+        private cluster: 'mainnet-beta' | 'devnet' = 'mainnet-beta'
+    ) { }
 
     async createLowCostMarket(
         baseMint: PublicKey,

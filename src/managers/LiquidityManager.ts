@@ -30,7 +30,7 @@ import {
 
 import { searcherClient } from 'jito-ts/dist/sdk/block-engine/searcher';
 import { Bundle } from 'jito-ts/dist/sdk/block-engine/types';
-import { Logger } from './utils';
+import { Logger } from '../core/utils';
 import { BN } from 'bn.js';
 import bs58 from 'bs58';
 
@@ -41,7 +41,7 @@ export class LiquidityManager {
     constructor(
         private connection: Connection,
         private wallet: Keypair,
-        private cluster: 'mainnet' | 'devnet' = 'mainnet',
+        private cluster: 'mainnet-beta' | 'devnet' = 'mainnet-beta',
         jitoAuthKey?: Keypair
     ) {
         this.jitoAuthKeypair = jitoAuthKey;
@@ -107,7 +107,7 @@ export class LiquidityManager {
         const raydium = await Raydium.load({
             connection: this.connection,
             owner: this.wallet,
-            cluster: this.cluster,
+            cluster: this.cluster as any,
             disableLoadToken: false // Loads token list
         });
 

@@ -89,7 +89,7 @@ export class DLMMManager implements LiquidityStrategy {
 
     // Create Pool Transaction using SDK
     // We use createCustomizablePermissionlessLbPair for anti-sniper features (activationPoint)
-    const createTx = await DLMM.createCustomizablePermissionlessLbPair(
+    const createTx = await (DLMM as any).createCustomizablePermissionlessLbPair(
       this.connection,
       new BN(DLMMManager.BIN_STEP),
       tokenX,

@@ -17,6 +17,7 @@ import { DLMMManager } from "../strategies/meteora";
 import { CPMMManager, AMMManager } from "../strategies/raydium";
 import { Logger, loadKeypairEnv, getExplorerLink } from "./utils";
 import { JitoManager } from "../managers/JitoManager";
+import { getJitoTipFloor } from "../utils/jitoTools";
 import dotenv from "dotenv";
 import bs58 from "bs58";
 
@@ -93,10 +94,15 @@ export class MemeKit {
         break;
     }
 
-    const jitoTip = options.jitoTip ?? 0.01;
+    const jitoTip =
+      typeof options.jitoTip === "number" ? options.jitoTip : 0.01;
     const buffer = 0.005;
 
     return baseFees + solLiquidity + jitoTip + buffer;
+  }
+
+  static async getSmartTip(): Promise<number> {
+    return getJitoTipFloor();
   }
 
   async recoverFunds(destinationAddress: string): Promise<string> {
@@ -200,14 +206,22 @@ export class MemeKit {
     // 4. Send Transaction (Jito or Real SOL)
     let signature = "Dry-run (not sent)";
     if (instructions.length > 0) {
-      if (options.jitoTip) {
-        Logger.info(
-          `Launching with Jito Bundle (Tip: ${options.jitoTip} SOL)...`
-        );
+      if (options.jitoTip !== undefined) {
+        const tipSol =
+          options.jitoTip === "auto"
+            ? await getJitoTipFloor()
+            : (options.jitoTip as number);
+
+        if (options.jitoTip === "auto") {
+          Logger.info(`Using Smart Tip: ${tipSol} SOL`);
+        }
+
+        Logger.info(`Launching with Jito Bundle (Tip: ${tipSol} SOL)...`);
         try {
           const bundleId = await this.jitoManager.sendBundle(
             instructions,
-            options.jitoTip
+            tipSol,
+            options.blockEngine
           );
           signature = bundleId;
           Logger.info(`Bundle Submitted: ${bundleId}`);

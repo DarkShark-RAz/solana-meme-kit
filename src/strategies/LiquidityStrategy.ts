@@ -4,6 +4,7 @@ import {
   TransactionInstruction,
   PublicKey,
 } from "@solana/web3.js";
+import type { BlockEngineRegion } from "../utils/jitoTools";
 
 export interface LaunchOptions {
   name: string;
@@ -27,7 +28,8 @@ export interface LaunchOptions {
 
   // Anti-Snipe (mainnet only)
   devBuySolAmount?: number;
-  jitoTip?: number; // Tip in SOL for bundling
+  jitoTip?: number | "auto"; // Tip in SOL for bundling
+  blockEngine?: BlockEngineRegion;
 
   meteoraOptions?: {
     activationPoint?: number; // Timestamp or slot

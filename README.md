@@ -14,6 +14,7 @@ A unified, open-source TypeScript SDK that abstracts the complexity of Solana to
 - **OpenBook Markets**: Supports automated low-cost market creation.
 - **Security**: Built-in helpers to revoke Mint and Freeze authorities.
 - **Standardized Interface**: Switch DEXs without changing your business logic.
+- **Jito Smart Tipping**: Use `jitoTip: "auto"` (or a manual tip) with optional block engine region routing.
 
 ## 📊 Strategy Comparison
 
@@ -33,7 +34,7 @@ import { MemeKit } from "solana-meme-kit";
 const kit = new MemeKit({
   rpcUrl: "https://api.mainnet-beta.solana.com",
   privateKey: "YOUR_PRIVATE_KEY",
-  cluster: "mainnet",
+  cluster: "mainnet-beta",
 });
 
 const result = await kit.launch({
@@ -41,17 +42,90 @@ const result = await kit.launch({
   symbol: "SGEM",
   image: "https://arweave.net/metadata",
   supply: 1_000_000_000,
-  solLiquidityAmount: 5,
-  tokenLiquidityAmount: 800_000_000,
+  liquidity: { solAmount: 5, tokenAmount: 800_000_000 },
   dex: "meteora:dlmm", // Choose strategy here
 });
 
 console.log(`Token: ${result.mint}, Pool: ${result.poolId}`);
 ```
 
+### Smart Tipping (Jito)
+
+`jitoTip` can be a number (SOL) or `"auto"`.
+
+```typescript
+import { MemeKit } from "solana-meme-kit";
+
+const kit = new MemeKit({
+  rpcUrl: "https://api.mainnet-beta.solana.com",
+  privateKey: "YOUR_PRIVATE_KEY",
+  cluster: "mainnet-beta",
+});
+
+const result = await kit.launch({
+  name: "Super Gem",
+  symbol: "SGEM",
+  image: "https://arweave.net/metadata",
+  liquidity: { solAmount: 5, tokenAmount: 800_000_000 },
+  dex: "meteora:dlmm",
+  jitoTip: "auto",
+  blockEngine: "ny",
+});
+
+console.log(result.signature);
+```
+
+Available `blockEngine` regions:
+
+- **default**
+- **ny**
+- **amsterdam**
+- **frankfurt**
+- **tokyo**
+- **slc**
+
+### Smart Tip Quote (for UI)
+
+```typescript
+import { MemeKit } from "solana-meme-kit";
+
+const tipSol = await MemeKit.getSmartTip();
+console.log(tipSol);
+```
+
+### Cost Estimation + Fund Recovery
+
+```typescript
+import { MemeKit } from "solana-meme-kit";
+
+const estimatedSol = MemeKit.estimateLaunchCost({
+  name: "Super Gem",
+  symbol: "SGEM",
+  image: "https://arweave.net/metadata",
+  liquidity: { solAmount: 5, tokenAmount: 800_000_000 },
+  dex: "meteora:dlmm",
+  jitoTip: "auto",
+});
+
+console.log(estimatedSol);
+```
+
+```typescript
+import { MemeKit } from "solana-meme-kit";
+
+const kit = new MemeKit({
+  rpcUrl: "https://api.mainnet-beta.solana.com",
+  privateKey: "YOUR_PRIVATE_KEY",
+  cluster: "mainnet-beta",
+});
+
+const txid = await kit.recoverFunds("DESTINATION_WALLET_ADDRESS");
+console.log(txid);
+```
+
 ## 🛠️ Architecture
 
-```
+```text
 src/
 ├── core/               # Main SDK and utilities
 ├── managers/           # Modular components (Token, Market, etc)
@@ -73,7 +147,7 @@ bun test
 - [x] Meteora DLMM Integration
 - [x] Raydium CPMM Integration
 - [x] Raydium AMM (Legacy) Integration
-- [ ] Jito Bundle Support (Mainnet)
+- [x] Jito Bundle Support (Mainnet)
 
 ## 📄 License
 

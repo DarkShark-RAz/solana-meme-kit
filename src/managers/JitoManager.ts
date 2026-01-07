@@ -42,7 +42,8 @@ export class JitoManager {
   async sendBundle(
     instructions: any[], // TransactionInstruction[]
     tipSol: number = 0.001,
-    region?: BlockEngineRegion
+    region?: BlockEngineRegion,
+    extraSigners: Keypair[] = []
   ): Promise<string> {
     if (region) this.setRegion(region);
     Logger.info(`Preparing Jito Bundle with tip: ${tipSol} SOL`);
@@ -69,7 +70,7 @@ export class JitoManager {
     }).compileToV0Message();
 
     const versionedTx = new VersionedTransaction(messageV0);
-    versionedTx.sign([this.wallet]);
+    versionedTx.sign([this.wallet, ...extraSigners]);
 
     const b = new Bundle([versionedTx], 5);
 

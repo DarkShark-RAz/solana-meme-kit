@@ -195,7 +195,7 @@ export class MemeKit {
         throw new Error(`Unknown DEX strategy: ${dex}`);
     }
 
-    const { poolId, instructions } = await strategy.initialize(
+    const { poolId, instructions, signers } = await strategy.initialize(
       options,
       mint.publicKey
     );
@@ -221,7 +221,8 @@ export class MemeKit {
           const bundleId = await this.jitoManager.sendBundle(
             instructions,
             tipSol,
-            options.blockEngine
+            options.blockEngine,
+            signers ?? []
           );
           signature = bundleId;
           Logger.info(`Bundle Submitted: ${bundleId}`);
@@ -238,7 +239,7 @@ export class MemeKit {
         }).compileToV0Message();
 
         const versionedTx = new VersionedTransaction(messageV0);
-        versionedTx.sign([this.wallet]);
+        versionedTx.sign([this.wallet, ...(signers ?? [])]);
 
         Logger.info("Sending Liquidity Setup Transaction...");
         try {

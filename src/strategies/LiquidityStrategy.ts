@@ -5,6 +5,7 @@ import {
   PublicKey,
 } from "@solana/web3.js";
 import type { BlockEngineRegion } from "../utils/jitoTools";
+import type { StrategyType } from "@meteora-ag/dlmm";
 
 export interface LaunchOptions {
   name: string;
@@ -36,6 +37,15 @@ export interface LaunchOptions {
     activationType?: "timestamp" | "slot";
   };
 
+  meteora?: {
+    binStep?: number;
+    width?: number;
+    strategyType?: StrategyType;
+
+    feeBps?: number;
+    baseFactor?: number;
+  };
+
   marketMode?: "low-cost" | "standard"; // For Raydium AMM
 
   // Legacy / Specifics
@@ -48,5 +58,6 @@ export interface LiquidityStrategy {
   ): Promise<{
     poolId: PublicKey;
     instructions: TransactionInstruction[];
+    signers?: Keypair[];
   }>;
 }

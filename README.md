@@ -91,7 +91,7 @@ const result = await kit.launch({
   image: "https://arweave.net/metadata",
   supply: 1_000_000_000,
   liquidity: { solAmount: 5, tokenAmount: 800_000_000 },
-  dex: "meteora:dlmm",
+  dex: "meteora",
   jitoTip: "auto",
 });
 
@@ -125,7 +125,7 @@ const result = await kit.launch({
   image: "https://arweave.net/metadata",
   supply: 1_000_000_000,
   liquidity: { solAmount: 5, tokenAmount: 800_000_000 },
-  dex: "meteora:dlmm", // Choose strategy here
+  dex: "meteora", // Default (alias for meteora:dlmm)
 });
 
 console.log(`Token: ${result.mint}, Pool: ${result.poolId}`);
@@ -166,7 +166,7 @@ Key `LaunchOptions` fields:
   - `liquidity: { solAmount, tokenAmount }` (recommended)
   - Legacy support: `solLiquidityAmount`, `tokenLiquidityAmount`
 - **Strategy selection**
-  - `dex`: `"meteora:dlmm" | "raydium:cpmm" | "raydium:amm"`
+  - `dex`: `"meteora" | "meteora:dlmm" | "raydium:cpmm" | "raydium:amm"`
   - `strategy`: legacy alias mapping is supported
 - **Jito**
   - `jitoTip`: number (SOL) or `"auto"`
@@ -174,10 +174,12 @@ Key `LaunchOptions` fields:
 - **Meteora activation (optional)**
   - `meteoraOptions.activationType`: `"timestamp" | "slot"`
   - `meteoraOptions.activationPoint`: number
+  - `meteoraOptions.activationDate`: `Date` (convenience; converted to unix seconds)
 - **Meteora DLMM config (optional)**
   - `meteora.binStep`: number (basis points between bins)
   - `meteora.width`: number (how many bins to seed)
   - `meteora.strategyType`: `StrategyType.Spot | StrategyType.Curve | StrategyType.BidAsk`
+  - `meteora.lfg`: `{ minPrice, maxPrice, curvature }` (LFG seeding mode)
 - **Raydium AMM market (optional)**
   - `marketMode`: `"low-cost" | "standard"`
 
@@ -215,7 +217,7 @@ The returned `poolId` is the pool address created/derived by the selected strate
 
 ### What the SDK does for DLMM
 
-When you select `dex: "meteora:dlmm"`, `DLMMManager.initialize()` generates instructions for:
+When you select `dex: "meteora"` (alias for `meteora:dlmm`), `DLMMManager.initialize()` generates instructions for:
 
 - Creating the permissionless DLMM pool
 - Initializing only the bin arrays needed for your chosen range
@@ -253,7 +255,7 @@ const result = await kit.launch({
   symbol: "SGEM",
   image: "https://arweave.net/metadata",
   liquidity: { solAmount: 5, tokenAmount: 800_000_000 },
-  dex: "meteora:dlmm",
+  dex: "meteora",
   meteora: {
     binStep: 100,
     width: 60,
@@ -300,6 +302,40 @@ How to choose:
 
 You can always start from a preset and override fields by passing a custom object instead.
 
+### Launch Styles (Recommended)
+
+`LaunchStyles` is the abstraction layer for common launch types. It bundles multiple low-level parameters into a single, human-readable choice.
+
+```typescript
+import { MemeKit, LaunchStyles } from "solana-meme-kit";
+
+const kit = new MemeKit({
+  rpcUrl: "https://api.mainnet-beta.solana.com",
+  privateKey: "YOUR_PRIVATE_KEY",
+  cluster: "mainnet-beta",
+});
+
+// Instant “viral memecoin” style
+await kit.launch({
+  name: "Super Gem",
+  symbol: "SGEM",
+  image: "https://arweave.net/metadata",
+  liquidity: { solAmount: 5, tokenAmount: 800_000_000 },
+  dex: "meteora",
+  meteora: LaunchStyles.VIRAL,
+});
+
+// Fair launch style (pool is created but trading is paused until the activation time)
+await kit.launch({
+  name: "Super Gem",
+  symbol: "SGEM",
+  image: "https://arweave.net/metadata",
+  liquidity: { solAmount: 5, tokenAmount: 800_000_000 },
+  dex: "meteora",
+  meteora: LaunchStyles.FAIR_LAUNCH(new Date(Date.now() + 60_000)),
+});
+```
+
 ```typescript
 import { MemeKit, MeteoraPresets } from "solana-meme-kit";
 
@@ -314,7 +350,7 @@ const result = await kit.launch({
   symbol: "SGEM",
   image: "https://arweave.net/metadata",
   liquidity: { solAmount: 5, tokenAmount: 800_000_000 },
-  dex: "meteora:dlmm",
+  dex: "meteora",
   meteora: MeteoraPresets.MEMECOIN_VOLATILE,
 });
 
@@ -339,7 +375,7 @@ const result = await kit.launch({
   symbol: "SGEM",
   image: "https://arweave.net/metadata",
   liquidity: { solAmount: 5, tokenAmount: 800_000_000 },
-  dex: "meteora:dlmm",
+  dex: "meteora",
   meteoraOptions: {
     activationType: "timestamp",
     activationPoint: Math.floor(Date.now() / 1000) + 60,
@@ -347,6 +383,63 @@ const result = await kit.launch({
 });
 
 console.log(result.signature);
+```
+
+You can also use `activationDate` as a convenience:
+
+```typescript
+import { MemeKit } from "solana-meme-kit";
+
+const kit = new MemeKit({
+  rpcUrl: "https://api.mainnet-beta.solana.com",
+  privateKey: "YOUR_PRIVATE_KEY",
+  cluster: "mainnet-beta",
+});
+
+const result = await kit.launch({
+  name: "Super Gem",
+  symbol: "SGEM",
+  image: "https://arweave.net/metadata",
+  liquidity: { solAmount: 5, tokenAmount: 800_000_000 },
+  dex: "meteora",
+  meteoraOptions: {
+    activationDate: new Date(Date.now() + 60_000),
+  },
+});
+
+console.log(result.signature);
+```
+
+### LFG Seeding (Liquidity For Growth)
+
+LFG mode allows you to seed liquidity across a specific price range (`minPrice` -> `maxPrice`) using a curved distribution.
+
+```typescript
+import { MemeKit } from "solana-meme-kit";
+
+const kit = new MemeKit({
+  rpcUrl: "https://api.mainnet-beta.solana.com",
+  privateKey: "YOUR_PRIVATE_KEY",
+  cluster: "mainnet-beta",
+});
+
+const result = await kit.launch({
+  name: "Super Gem",
+  symbol: "SGEM",
+  image: "https://arweave.net/metadata",
+  liquidity: { solAmount: 5, tokenAmount: 800_000_000 },
+  dex: "meteora",
+  meteora: {
+    binStep: 100,
+    lfg: {
+      minPrice: 0.0000000009,
+      maxPrice: 0.0000000011,
+      curvature: 0.6,
+    },
+  },
+});
+
+console.log(result.poolId);
 ```
 
 ## 💧 Raydium Guide
@@ -416,7 +509,7 @@ const result = await kit.launch({
   symbol: "SGEM",
   image: "https://arweave.net/metadata",
   liquidity: { solAmount: 5, tokenAmount: 800_000_000 },
-  dex: "meteora:dlmm",
+  dex: "meteora",
   jitoTip: "auto",
   blockEngine: "ny",
 });
@@ -468,7 +561,7 @@ const estimatedSol = MemeKit.estimateLaunchCost({
   symbol: "SGEM",
   image: "https://arweave.net/metadata",
   liquidity: { solAmount: 5, tokenAmount: 800_000_000 },
-  dex: "meteora:dlmm",
+  dex: "meteora",
   jitoTip: "auto",
 });
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { MemeKit, MeteoraPresets } from "../src";
+import { MemeKit, MeteoraPresets, LaunchStyles } from "../src";
 
 describe("MemeKit SDK", () => {
   it("should export MemeKit class", () => {
@@ -10,6 +10,13 @@ describe("MemeKit SDK", () => {
     expect(MeteoraPresets).toBeDefined();
     expect(MeteoraPresets.MEMECOIN_VOLATILE).toBeDefined();
     expect(MeteoraPresets.ANTI_SNIPE_FEE).toBeDefined();
+  });
+
+  it("should export LaunchStyles", () => {
+    expect(LaunchStyles).toBeDefined();
+    expect(LaunchStyles.VIRAL).toBeDefined();
+    expect(typeof LaunchStyles.FAIR_LAUNCH).toBe("function");
+    expect(LaunchStyles.FAIR_LAUNCH(new Date()).activationDate).toBeDefined();
   });
 
   it("should instantiate with config", () => {

@@ -4,7 +4,11 @@ import {
   PublicKey,
   TransactionInstruction,
 } from "@solana/web3.js";
-import type { LiquidityStrategy, LaunchOptions } from "../LiquidityStrategy";
+import type {
+  LiquidityStrategy,
+  LaunchOptions,
+  MeteoraOptions,
+} from "../LiquidityStrategy";
 import DLMM, {
   binIdToBinArrayIndex,
   createProgram,
@@ -20,9 +24,9 @@ import DLMM, {
   StrategyType,
   toStrategyParameters,
 } from "@meteora-ag/dlmm";
-import { BN } from "bn.js";
+import BN from "bn.js";
 import { Logger } from "../../core/utils";
-import { MeteoraPresets } from "./presets";
+import { LaunchStyles, MeteoraPresets } from "./presets";
 import {
   createCloseAccountInstruction,
   createSyncNativeInstruction,
@@ -35,6 +39,7 @@ import { SYSVAR_RENT_PUBKEY, SystemProgram } from "@solana/web3.js";
 export class DLMMManager implements LiquidityStrategy {
   private static DEFAULT_BASE_FACTOR = 10000;
   private static U16_MAX = 65535;
+  private static MAX_LFG_BINS_SINGLE_TX = 26;
   private programId: PublicKey;
 
   constructor(
@@ -73,6 +78,70 @@ export class DLMMManager implements LiquidityStrategy {
     return activeId;
   }
 
+  private priceToBinId(
+    price: number,
+    tokenDecimals: number = 6,
+    binStep: number,
+    invert: boolean
+  ): number {
+    const solDecimals = 9;
+    const p = invert ? 1 / price : price;
+    const pricePerLamport = DLMM.getPricePerLamport(
+      invert ? solDecimals : tokenDecimals,
+      invert ? tokenDecimals : solDecimals,
+      p
+    );
+    return DLMM.getBinIdFromPrice(pricePerLamport, binStep, false);
+  }
+
+  private calculateLfgDistribution(params: {
+    activeBinId: number;
+    lowerBinId: number;
+    upperBinId: number;
+    curvature: number;
+  }): { binId: number; weight: number }[] {
+    const { activeBinId, lowerBinId, upperBinId, curvature } = params;
+
+    const safeCurvature = Math.max(0, Math.min(1, curvature));
+    const binCount = upperBinId - lowerBinId + 1;
+    if (binCount <= 0) return [];
+
+    const center = Math.max(lowerBinId, Math.min(upperBinId, activeBinId));
+    const alpha = 1 + safeCurvature * 12;
+    const maxDist = Math.max(
+      1,
+      Math.max(center - lowerBinId, upperBinId - center)
+    );
+
+    const raw: number[] = [];
+    let total = 0;
+    for (let binId = lowerBinId; binId <= upperBinId; binId++) {
+      const dist = Math.abs(binId - center) / maxDist;
+      const w = Math.exp(-alpha * dist);
+      raw.push(w);
+      total += w;
+    }
+
+    const targetSum = 10000;
+    const weights: number[] = [];
+    let running = 0;
+    for (let i = 0; i < raw.length; i++) {
+      const w = Math.max(1, Math.floor((raw[i]! / total) * targetSum));
+      weights.push(w);
+      running += w;
+    }
+    const diff = targetSum - running;
+    weights[weights.length - 1] = Math.max(
+      1,
+      weights[weights.length - 1]! + diff
+    );
+
+    return weights.map((weight, i) => ({
+      binId: lowerBinId + i,
+      weight,
+    }));
+  }
+
   async initialize(
     options: LaunchOptions,
     mint: PublicKey
@@ -97,20 +166,32 @@ export class DLMMManager implements LiquidityStrategy {
         .slice(0, 8)}...`
     );
 
-    const config = {
-      binStep:
-        options.meteora?.binStep ?? MeteoraPresets.MEMECOIN_VOLATILE.binStep,
-      width: options.meteora?.width ?? MeteoraPresets.MEMECOIN_VOLATILE.width,
-      strategyType:
-        options.meteora?.strategyType ??
-        MeteoraPresets.MEMECOIN_VOLATILE.strategyType,
+    const meteora: MeteoraOptions = options.meteora ?? LaunchStyles.VIRAL;
+
+    const strategyTypeFromString = (s?: string) => {
+      switch (s) {
+        case "Curve":
+          return StrategyType.Curve;
+        case "BidAsk":
+          return StrategyType.BidAsk;
+        case "Spot":
+        default:
+          return StrategyType.Spot;
+      }
     };
 
-    const baseFactor =
-      options.meteora?.baseFactor ?? DLMMManager.DEFAULT_BASE_FACTOR;
+    const config = {
+      binStep: meteora.binStep ?? LaunchStyles.VIRAL.binStep,
+      width: meteora.width ?? LaunchStyles.VIRAL.width,
+      strategyType:
+        meteora.strategyType ??
+        strategyTypeFromString(meteora.strategy ?? LaunchStyles.VIRAL.strategy),
+      includeAlphaVault: meteora.includeAlphaVault ?? false,
+    };
+
+    const baseFactor = meteora.baseFactor ?? DLMMManager.DEFAULT_BASE_FACTOR;
     const feeBpsNumber =
-      options.meteora?.feeBps ??
-      Math.floor((baseFactor * config.binStep) / 10000);
+      meteora.feeBps ?? Math.floor((baseFactor * config.binStep) / 10000);
 
     const maxFeeBps = Math.floor(
       (DLMMManager.U16_MAX * config.binStep) / 10000
@@ -139,7 +220,7 @@ export class DLMMManager implements LiquidityStrategy {
     const activeId = this.calculateActiveBinId(
       solLiquidityAmount,
       tokenLiquidityAmount,
-      options.decimals,
+      options.decimals ?? 6,
       config.binStep,
       invertPrice
     );
@@ -154,8 +235,28 @@ export class DLMMManager implements LiquidityStrategy {
 
     const program = createProgram(this.connection, { cluster: this.cluster });
 
-    const activationType =
+    let activationType =
       options.meteoraOptions?.activationType === "slot" ? 0 : 1;
+    let activationPoint: BN;
+    const activationDate =
+      meteora.activationDate ?? options.meteoraOptions?.activationDate;
+
+    if (activationDate) {
+      activationType = 1;
+      activationPoint = new BN(Math.floor(activationDate.getTime() / 1000));
+
+      if (activationDate.getTime() > Date.now()) {
+        Logger.info(
+          `Pool created. Trading starts at ${activationDate.toISOString()}.`
+        );
+      }
+    } else if (options.meteoraOptions?.activationPoint !== undefined) {
+      activationPoint = new BN(options.meteoraOptions.activationPoint);
+    } else {
+      activationType = 1;
+      activationPoint = new BN(Math.floor(Date.now() / 1000));
+    }
+
     const createTx = await DLMM.createCustomizablePermissionlessLbPair(
       this.connection,
       new BN(config.binStep),
@@ -164,18 +265,53 @@ export class DLMMManager implements LiquidityStrategy {
       new BN(activeId),
       feeBps,
       activationType,
-      false,
+      config.includeAlphaVault,
       this.wallet.publicKey,
-      options.meteoraOptions?.activationPoint
-        ? new BN(options.meteoraOptions.activationPoint)
-        : undefined,
+      activationPoint,
       false,
       { cluster: this.cluster, skipSolWrappingOperation: true }
     );
 
-    const width = config.width;
-    const lowerBinId = activeId - Math.floor(width / 2);
-    const upperBinId = lowerBinId + width - 1;
+    const lfg = meteora.lfg;
+    const hasLfg =
+      lfg?.minPrice !== undefined &&
+      lfg?.maxPrice !== undefined &&
+      (lfg?.curvature !== undefined || lfg !== undefined);
+    let lowerBinId: number;
+    let upperBinId: number;
+    if (lfg) {
+      if (lfg.minPrice === undefined || lfg.maxPrice === undefined) {
+        throw new Error("meteora.lfg requires minPrice and maxPrice");
+      }
+      const curvature = lfg.curvature ?? 0.6;
+      if (lfg.minPrice <= 0 || lfg.maxPrice <= 0) {
+        throw new Error("meteora.lfg minPrice/maxPrice must be > 0");
+      }
+      const minPrice = Math.min(lfg.minPrice, lfg.maxPrice);
+      const maxPrice = Math.max(lfg.minPrice, lfg.maxPrice);
+      const minBinId = this.priceToBinId(
+        minPrice,
+        options.decimals ?? 6,
+        config.binStep,
+        invertPrice
+      );
+      const maxBinId = this.priceToBinId(
+        maxPrice,
+        options.decimals ?? 6,
+        config.binStep,
+        invertPrice
+      );
+      lowerBinId = Math.min(minBinId, maxBinId);
+      upperBinId = Math.max(minBinId, maxBinId);
+    } else {
+      const width = config.width;
+      lowerBinId = activeId - Math.floor(width / 2);
+      upperBinId = lowerBinId + width - 1;
+    }
+
+    const binCount = upperBinId - lowerBinId + 1;
+    const shouldUseLfgWeights =
+      hasLfg && binCount <= DLMMManager.MAX_LFG_BINS_SINGLE_TX;
 
     const binArrayIndexes = getBinArrayIndexesCoverage(
       new BN(lowerBinId),
@@ -285,20 +421,6 @@ export class DLMMManager implements LiquidityStrategy {
       );
     }
 
-    const strategyParameters = toStrategyParameters({
-      minBinId: lowerBinId,
-      maxBinId: upperBinId,
-      strategyType: config.strategyType,
-    });
-
-    const liquidityParam = {
-      amountX: xAmountLamports,
-      amountY: yAmountLamports,
-      activeId,
-      maxActiveBinSlippage: 1,
-      strategyParameters,
-    };
-
     const minBinArrayIndex = binIdToBinArrayIndex(new BN(lowerBinId));
     const maxBinArrayIndex = binIdToBinArrayIndex(new BN(upperBinId));
     const useExtension =
@@ -318,27 +440,97 @@ export class DLMMManager implements LiquidityStrategy {
       this.programId
     );
 
-    const addLiquidityIx = await program.methods
-      .addLiquidityByStrategy2(liquidityParam, { slices: [] })
-      .accounts({
-        position: positionKeypair.publicKey,
-        lbPair: poolPubkey,
-        binArrayBitmapExtension,
-        userTokenX,
-        userTokenY,
-        reserveX,
-        reserveY,
-        tokenXMint: tokenX,
-        tokenYMint: tokenY,
-        sender: this.wallet.publicKey,
-        tokenXProgram: TOKEN_PROGRAM_ID,
-        tokenYProgram: TOKEN_PROGRAM_ID,
-        eventAuthority: deriveEventAuthority(this.programId)[0],
-        program: this.programId,
-      } as any)
-      .remainingAccounts(binArrayAccountMetas)
-      .instruction();
-    instructions.push(addLiquidityIx);
+    if (shouldUseLfgWeights) {
+      const curvature = lfg!.curvature ?? 0.6;
+      const dist = this.calculateLfgDistribution({
+        activeBinId: activeId,
+        lowerBinId,
+        upperBinId,
+        curvature,
+      });
+      if (dist.length === 0) {
+        throw new Error("Failed to compute LFG distribution");
+      }
+
+      const lowerBinArray = deriveBinArray(
+        poolPubkey,
+        minBinArrayIndex,
+        this.programId
+      )[0];
+      const upperBinArray = deriveBinArray(
+        poolPubkey,
+        maxBinArrayIndex,
+        this.programId
+      )[0];
+
+      const liquidityParamByWeight = {
+        amountX: xAmountLamports,
+        amountY: yAmountLamports,
+        activeId,
+        maxActiveBinSlippage: 1,
+        binLiquidityDist: dist,
+      };
+
+      const addLiquidityIx = await (program.methods as any)
+        .addLiquidityByWeight(liquidityParamByWeight)
+        .accounts({
+          position: positionKeypair.publicKey,
+          lbPair: poolPubkey,
+          binArrayBitmapExtension,
+          userTokenX,
+          userTokenY,
+          reserveX,
+          reserveY,
+          tokenXMint: tokenX,
+          tokenYMint: tokenY,
+          binArrayLower: lowerBinArray,
+          binArrayUpper: upperBinArray,
+          sender: this.wallet.publicKey,
+          tokenXProgram: TOKEN_PROGRAM_ID,
+          tokenYProgram: TOKEN_PROGRAM_ID,
+          eventAuthority: deriveEventAuthority(this.programId)[0],
+          program: this.programId,
+        } as any)
+        .remainingAccounts(binArrayAccountMetas)
+        .instruction();
+      instructions.push(addLiquidityIx);
+    } else {
+      const strategyParameters = toStrategyParameters({
+        minBinId: lowerBinId,
+        maxBinId: upperBinId,
+        strategyType: hasLfg ? StrategyType.Spot : config.strategyType,
+      });
+
+      const liquidityParam = {
+        amountX: xAmountLamports,
+        amountY: yAmountLamports,
+        activeId,
+        maxActiveBinSlippage: 1,
+        strategyParameters,
+      };
+
+      const addLiquidityIx = await program.methods
+        .addLiquidityByStrategy2(liquidityParam, { slices: [] })
+        .accounts({
+          position: positionKeypair.publicKey,
+          lbPair: poolPubkey,
+          binArrayBitmapExtension,
+          userTokenX,
+          userTokenY,
+          reserveX,
+          reserveY,
+          tokenXMint: tokenX,
+          tokenYMint: tokenY,
+          sender: this.wallet.publicKey,
+          tokenXProgram: TOKEN_PROGRAM_ID,
+          tokenYProgram: TOKEN_PROGRAM_ID,
+          eventAuthority: deriveEventAuthority(this.programId)[0],
+          program: this.programId,
+        } as any)
+        .remainingAccounts(binArrayAccountMetas)
+        .instruction();
+      instructions.push(addLiquidityIx);
+    }
 
     instructions.push(...wsolCloseIxs);
 

@@ -7,6 +7,29 @@ import {
 import type { BlockEngineRegion } from "../utils/jitoTools";
 import type { StrategyType } from "@meteora-ag/dlmm";
 
+export type MeteoraStrategy = "Spot" | "Curve" | "BidAsk";
+
+export interface MeteoraOptions {
+  activationDate?: Date;
+
+  binStep?: number;
+  width?: number;
+
+  strategy?: MeteoraStrategy;
+  strategyType?: StrategyType;
+
+  lfg?: {
+    minPrice?: number;
+    maxPrice?: number;
+    curvature?: number;
+  };
+
+  feeBps?: number;
+  baseFactor?: number;
+
+  includeAlphaVault?: boolean;
+}
+
 export interface LaunchOptions {
   name: string;
   symbol: string;
@@ -24,7 +47,7 @@ export interface LaunchOptions {
   };
 
   // Strategy Config
-  dex?: "meteora:dlmm" | "raydium:cpmm" | "raydium:amm";
+  dex?: "meteora" | "meteora:dlmm" | "raydium:cpmm" | "raydium:amm";
   strategy?: "meteora" | "raydium-cpmm" | "raydium-amm";
 
   // Anti-Snipe (mainnet only)
@@ -34,17 +57,11 @@ export interface LaunchOptions {
 
   meteoraOptions?: {
     activationPoint?: number; // Timestamp or slot
+    activationDate?: Date;
     activationType?: "timestamp" | "slot";
   };
 
-  meteora?: {
-    binStep?: number;
-    width?: number;
-    strategyType?: StrategyType;
-
-    feeBps?: number;
-    baseFactor?: number;
-  };
+  meteora?: MeteoraOptions;
 
   marketMode?: "low-cost" | "standard"; // For Raydium AMM
 

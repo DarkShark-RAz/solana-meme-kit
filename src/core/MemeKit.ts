@@ -67,15 +67,17 @@ export class MemeKit {
   static estimateLaunchCost(options: LaunchOptions): number {
     const solLiquidity =
       options.liquidity?.solAmount ?? options.solLiquidityAmount ?? 0;
-    const dex =
+
+    const selected =
       options.dex ??
       (options.strategy === "meteora"
-        ? "meteora:dlmm"
+        ? "meteora"
         : options.strategy === "raydium-cpmm"
         ? "raydium:cpmm"
         : options.strategy === "raydium-amm"
         ? "raydium:amm"
-        : "meteora:dlmm");
+        : "meteora");
+    const dex = selected === "meteora" ? "meteora:dlmm" : selected;
 
     let baseFees = 0;
     switch (dex) {
@@ -92,6 +94,37 @@ export class MemeKit {
       default:
         baseFees = 0.025;
         break;
+    }
+
+    // LFG can involve a larger bin range which increases rent due to more bin arrays.
+    // Keep the default (non-LFG) estimate unchanged, and add a small increment when the
+    // estimated bin range exceeds the default width.
+    const lfg = options.meteora?.lfg;
+    if (
+      dex === "meteora:dlmm" &&
+      lfg?.minPrice !== undefined &&
+      lfg?.maxPrice !== undefined
+    ) {
+      const binStep = options.meteora?.binStep ?? 100;
+      const minPrice = Math.min(lfg.minPrice, lfg.maxPrice);
+      const maxPrice = Math.max(lfg.minPrice, lfg.maxPrice);
+      if (minPrice > 0 && maxPrice > 0 && binStep > 0) {
+        const step = binStep / 10000;
+        const ratio = maxPrice / minPrice;
+        const binCount = Math.max(
+          1,
+          Math.floor(Math.log(ratio) / Math.log(1 + step)) + 1
+        );
+
+        const binsPerArray = 70;
+        const defaultWidth = 80;
+        const defaultBinArrays = Math.ceil(defaultWidth / binsPerArray);
+        const binArrays = Math.ceil(binCount / binsPerArray);
+        const extraBinArrays = Math.max(0, binArrays - defaultBinArrays);
+
+        const rentPerExtraBinArraySol = 0.001;
+        baseFees += extraBinArrays * rentPerExtraBinArraySol;
+      }
     }
 
     const jitoTip =
@@ -145,15 +178,16 @@ export class MemeKit {
   }
 
   async launch(options: LaunchOptions) {
-    const dex =
+    const selected =
       options.dex ??
       (options.strategy === "meteora"
-        ? "meteora:dlmm"
+        ? "meteora"
         : options.strategy === "raydium-cpmm"
         ? "raydium:cpmm"
         : options.strategy === "raydium-amm"
         ? "raydium:amm"
-        : "meteora:dlmm");
+        : "meteora");
+    const dex = selected === "meteora" ? "meteora:dlmm" : selected;
 
     Logger.info(`Starting Launch on strategy: ${dex}`);
 
@@ -195,7 +229,7 @@ export class MemeKit {
         throw new Error(`Unknown DEX strategy: ${dex}`);
     }
 
-    const { poolId, instructions } = await strategy.initialize(
+    const { poolId, instructions, signers } = await strategy.initialize(
       options,
       mint.publicKey
     );
@@ -221,7 +255,8 @@ export class MemeKit {
           const bundleId = await this.jitoManager.sendBundle(
             instructions,
             tipSol,
-            options.blockEngine
+            options.blockEngine,
+            signers ?? []
           );
           signature = bundleId;
           Logger.info(`Bundle Submitted: ${bundleId}`);
@@ -238,7 +273,7 @@ export class MemeKit {
         }).compileToV0Message();
 
         const versionedTx = new VersionedTransaction(messageV0);
-        versionedTx.sign([this.wallet]);
+        versionedTx.sign([this.wallet, ...(signers ?? [])]);
 
         Logger.info("Sending Liquidity Setup Transaction...");
         try {

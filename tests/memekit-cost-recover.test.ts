@@ -89,11 +89,20 @@ describe("MemeKit.launch (devnet)", () => {
     let sendTransactionCalled = 0;
     let sendBundleCalled = 0;
 
+    const expectedTxOptions = {
+      skipPreflight: true,
+      minContextSlot: 12345,
+      maxRetries: 7,
+    };
+
+    const capturedSendOptions: any[] = [];
+
     // Prevent any real RPC interactions
     (kit as any).connection = {
       getLatestBlockhash: async () => ({ blockhash, lastValidBlockHeight }),
-      sendTransaction: async () => {
+      sendTransaction: async (_tx: any, opts?: any) => {
         sendTransactionCalled++;
+        capturedSendOptions.push(opts);
         return signature;
       },
       confirmTransaction: async () => ({ value: { err: null } }),
@@ -144,11 +153,20 @@ describe("MemeKit.launch (devnet)", () => {
         liquidity: { solAmount: 1, tokenAmount: 1 },
         dex: "meteora",
         jitoTip: 0.01,
+        txOptions: expectedTxOptions,
       } as any);
 
       expect(res.signature).toBe(signature);
       expect(sendTransactionCalled).toBe(2);
       expect(sendBundleCalled).toBe(0);
+
+      expect(capturedSendOptions.length).toBe(2);
+      for (const opt of capturedSendOptions) {
+        expect(opt).toBeDefined();
+        expect(opt.skipPreflight).toBe(true);
+        expect(opt.minContextSlot).toBe(12345);
+        expect(opt.maxRetries).toBe(7);
+      }
     } finally {
       DLMMManager.prototype.initialize = originalInitialize;
     }

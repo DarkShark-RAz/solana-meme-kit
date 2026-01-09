@@ -9,6 +9,12 @@ import type { StrategyType } from "@meteora-ag/dlmm";
 
 export type MeteoraStrategy = "Spot" | "Curve" | "BidAsk";
 
+export interface MemeKitSendOptions {
+  skipPreflight?: boolean;
+  minContextSlot?: number;
+  maxRetries?: number;
+}
+
 export interface MeteoraOptions {
   activationDate?: Date;
 
@@ -37,6 +43,8 @@ export interface LaunchOptions {
   image: string; // URL or File path (handled by TokenManager)
   decimals?: number;
   supply?: number;
+
+  txOptions?: MemeKitSendOptions;
 
   // Liquidity
   solLiquidityAmount?: number;

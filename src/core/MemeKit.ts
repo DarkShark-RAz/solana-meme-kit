@@ -194,18 +194,33 @@ export class MemeKit {
 
     Logger.info(`Starting Launch on strategy: ${dex}`);
 
+    const sendOptions = options.txOptions
+      ? {
+          skipPreflight: options.txOptions.skipPreflight,
+          minContextSlot: options.txOptions.minContextSlot,
+          maxRetries: options.txOptions.maxRetries,
+        }
+      : undefined;
+
     // 1. Create Token
-    const { mint } = await this.tokenManager.createToken({
-      name: options.name,
-      symbol: options.symbol,
-      uri: options.image,
-      decimals: options.decimals,
-      initialSupply: options.supply || 1_000_000_000,
-    });
+    const { mint } = await this.tokenManager.createToken(
+      {
+        name: options.name,
+        symbol: options.symbol,
+        uri: options.image,
+        decimals: options.decimals,
+        initialSupply: options.supply || 1_000_000_000,
+      },
+      options.txOptions
+    );
     Logger.info(`Token Minted: ${mint.publicKey.toBase58()}`);
 
     // 2. Revoke Authorities
-    await this.tokenManager.revokeAuthorities(mint.publicKey, this.wallet);
+    await this.tokenManager.revokeAuthorities(
+      mint.publicKey,
+      this.wallet,
+      options.txOptions
+    );
 
     // 3. Execute Liquidity Strategy
     let strategy: LiquidityStrategy;
@@ -259,28 +274,95 @@ export class MemeKit {
             }).compileToV0Message();
 
             const versionedTx = new VersionedTransaction(messageV0);
-            versionedTx.sign([this.wallet, ...(signers ?? [])]);
+
+            // Filter signers to only those required by this group's message
+            const requiredSignerKeys = new Set(
+              messageV0.staticAccountKeys
+                .slice(0, messageV0.header.numRequiredSignatures)
+                .map((k) => k.toBase58())
+            );
+            const groupSigners = [
+              this.wallet,
+              ...(signers ?? []).filter((s) =>
+                requiredSignerKeys.has(s.publicKey.toBase58())
+              ),
+            ];
+            versionedTx.sign(groupSigners);
 
             Logger.info("Sending Liquidity Setup Transaction...");
-            signature = await this.connection.sendTransaction(versionedTx);
-            await this.connection.confirmTransaction(
-              {
-                signature,
-                blockhash: recentBlockhash.blockhash,
-                lastValidBlockHeight: recentBlockhash.lastValidBlockHeight,
-              },
-              "confirmed"
+            signature = await this.connection.sendTransaction(
+              versionedTx,
+              sendOptions
             );
-            Logger.info(`Transaction Sent: ${signature}`);
-          }
+            const logTxFailure = async () => {
+              try {
+                const tx = await this.connection.getTransaction(signature, {
+                  commitment: "confirmed",
+                  maxSupportedTransactionVersion: 0,
+                });
+                if (tx?.meta?.logMessages) {
+                  Logger.error(`On-chain logs for ${signature}:`);
+                  for (const l of tx.meta.logMessages) Logger.error(l);
+                }
+                if (tx?.meta?.err) {
+                  Logger.error(
+                    `On-chain error for ${signature}: ${JSON.stringify(
+                      tx.meta.err
+                    )}`
+                  );
+                }
+              } catch {
+                // ignore
+              }
+            };
 
-          Logger.info("Transaction Confirmed! ✓");
-          Logger.info(
-            `Explorer: ${getExplorerLink("tx", signature, this.cluster)}`
-          );
+            let confirmation:
+              | Awaited<ReturnType<typeof this.connection.confirmTransaction>>
+              | undefined;
+            try {
+              confirmation = await this.connection.confirmTransaction(
+                {
+                  signature,
+                  blockhash: recentBlockhash.blockhash,
+                  lastValidBlockHeight: recentBlockhash.lastValidBlockHeight,
+                },
+                "confirmed"
+              );
+            } catch (e: any) {
+              await logTxFailure();
+              const msg =
+                e instanceof Error
+                  ? e.message
+                  : typeof e === "string"
+                  ? e
+                  : JSON.stringify(e);
+              throw new Error(
+                `confirmTransaction threw (sig=${signature}): ${msg}`
+              );
+            }
+            if (confirmation?.value?.err) {
+              await logTxFailure();
+              throw new Error(
+                `Transaction reverted on-chain (sig=${signature}): ${JSON.stringify(
+                  confirmation.value.err
+                )}`
+              );
+            }
+            Logger.info(`Transaction Confirmed: ${signature}`);
+            Logger.info("Transaction Confirmed! ✓");
+            Logger.info(
+              `Explorer: ${getExplorerLink("tx", signature, this.cluster)}`
+            );
+          }
         } catch (err: any) {
-          Logger.error(`Transaction failed: ${err.message}`);
-          signature = `Failed: ${err.message}`;
+          const msg =
+            err instanceof Error
+              ? err.message
+              : typeof err === "string"
+              ? err
+              : JSON.stringify(err);
+          Logger.error(`Transaction failed: ${msg}`);
+          throw err;
         }
       } else if (options.jitoTip !== undefined) {
         const tipSol =
@@ -312,7 +394,7 @@ export class MemeKit {
           Logger.info(`Bundle Submitted: ${bundleId}`);
         } catch (err: any) {
           Logger.error(`Jito Bundle failed: ${err.message}`);
-          signature = `Failed: ${err.message}`;
+          throw err;
         }
       } else {
         const recentBlockhash = await this.connection.getLatestBlockhash();
@@ -323,27 +405,97 @@ export class MemeKit {
         }).compileToV0Message();
 
         const versionedTx = new VersionedTransaction(messageV0);
-        versionedTx.sign([this.wallet, ...(signers ?? [])]);
+
+        // Filter signers to only those required by the message
+        const requiredSignerKeys = new Set(
+          messageV0.staticAccountKeys
+            .slice(0, messageV0.header.numRequiredSignatures)
+            .map((k) => k.toBase58())
+        );
+        const txSigners = [
+          this.wallet,
+          ...(signers ?? []).filter((s) =>
+            requiredSignerKeys.has(s.publicKey.toBase58())
+          ),
+        ];
+        versionedTx.sign(txSigners);
 
         Logger.info("Sending Liquidity Setup Transaction...");
         try {
-          signature = await this.connection.sendTransaction(versionedTx);
-          await this.connection.confirmTransaction(
-            {
-              signature,
-              blockhash: recentBlockhash.blockhash,
-              lastValidBlockHeight: recentBlockhash.lastValidBlockHeight,
-            },
-            "confirmed"
+          signature = await this.connection.sendTransaction(
+            versionedTx,
+            sendOptions
           );
-          Logger.info(`Transaction Sent: ${signature}`);
+          const logTxFailure = async () => {
+            try {
+              const tx = await this.connection.getTransaction(signature, {
+                commitment: "confirmed",
+                maxSupportedTransactionVersion: 0,
+              });
+              if (tx?.meta?.logMessages) {
+                Logger.error(`On-chain logs for ${signature}:`);
+                for (const l of tx.meta.logMessages) Logger.error(l);
+              }
+              if (tx?.meta?.err) {
+                Logger.error(
+                  `On-chain error for ${signature}: ${JSON.stringify(
+                    tx.meta.err
+                  )}`
+                );
+              }
+            } catch {
+              // ignore
+            }
+          };
+
+          let confirmation:
+            | Awaited<ReturnType<typeof this.connection.confirmTransaction>>
+            | undefined;
+          try {
+            confirmation = await this.connection.confirmTransaction(
+              {
+                signature,
+                blockhash: recentBlockhash.blockhash,
+                lastValidBlockHeight: recentBlockhash.lastValidBlockHeight,
+              },
+              "confirmed"
+            );
+          } catch (e: any) {
+            await logTxFailure();
+            const msg =
+              e instanceof Error
+                ? e.message
+                : typeof e === "string"
+                ? e
+                : JSON.stringify(e);
+            throw new Error(
+              `confirmTransaction threw (sig=${signature}): ${msg}`
+            );
+          }
+
+          if (confirmation?.value?.err) {
+            await logTxFailure();
+            throw new Error(
+              `Transaction reverted on-chain (sig=${signature}): ${JSON.stringify(
+                confirmation.value.err
+              )}`
+            );
+          }
+
+          Logger.info(`Transaction Confirmed: ${signature}`);
           Logger.info("Transaction Confirmed! ✓");
           Logger.info(
             `Explorer: ${getExplorerLink("tx", signature, this.cluster)}`
           );
         } catch (err: any) {
-          Logger.error(`Transaction failed: ${err.message}`);
-          signature = `Failed: ${err.message}`;
+          const msg =
+            err instanceof Error
+              ? err.message
+              : typeof err === "string"
+              ? err
+              : JSON.stringify(err);
+          Logger.error(`Transaction failed: ${msg}`);
+          throw err;
         }
       }
     }

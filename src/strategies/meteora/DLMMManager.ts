@@ -43,6 +43,8 @@ export class DLMMManager implements LiquidityStrategy {
   private static DEFAULT_BASE_FACTOR = 10000;
   private static U16_MAX = 65535;
   private static MAX_LFG_BINS_SINGLE_TX = 26;
+  private static DLMM_DEFAULT_BIN_PER_POSITION = 70;
+  private static MEMEKIT_POSITION_WIDTH_CAP = 60;
   private programId: PublicKey;
 
   constructor(
@@ -65,19 +67,14 @@ export class DLMMManager implements LiquidityStrategy {
     invert: boolean
   ): number {
     const solDecimals = 9;
-    const adjustedPrice =
-      (solAmount * Math.pow(10, tokenDecimals)) /
-      (tokenAmount * Math.pow(10, solDecimals));
-    const price = invert ? 1 / adjustedPrice : adjustedPrice;
+    const price = invert ? tokenAmount / solAmount : solAmount / tokenAmount;
     const pricePerLamport = DLMM.getPricePerLamport(
       invert ? solDecimals : tokenDecimals,
       invert ? tokenDecimals : solDecimals,
       price
     );
     const activeId = DLMM.getBinIdFromPrice(pricePerLamport, binStep, false);
-    Logger.info(
-      `Calculated Active Bin ID: ${activeId} for price ${adjustedPrice}`
-    );
+    Logger.info(`Calculated Active Bin ID: ${activeId} for price ${price}`);
     return activeId;
   }
 
@@ -184,27 +181,32 @@ export class DLMMManager implements LiquidityStrategy {
       }
     };
 
+    let binStep = meteora.binStep ?? LaunchStyles.VIRAL.binStep;
+    const width = Math.min(
+      meteora.width ?? LaunchStyles.VIRAL.width,
+      DLMMManager.MEMEKIT_POSITION_WIDTH_CAP
+    );
+
+    const baseFactor = meteora.baseFactor ?? DLMMManager.DEFAULT_BASE_FACTOR;
+    let feeBpsNumber =
+      meteora.feeBps ?? Math.floor((baseFactor * binStep) / 10000);
+
+    if (this.cluster === "devnet") {
+      Logger.info(
+        "Devnet detected: forcing Meteora factory preset binStep=10 and feeBps=1000"
+      );
+      binStep = 10;
+      feeBpsNumber = 1000;
+    }
+
     const config = {
-      binStep: meteora.binStep ?? LaunchStyles.VIRAL.binStep,
-      width: meteora.width ?? LaunchStyles.VIRAL.width,
+      binStep,
+      width,
       strategyType:
         meteora.strategyType ??
         strategyTypeFromString(meteora.strategy ?? LaunchStyles.VIRAL.strategy),
       includeAlphaVault: meteora.includeAlphaVault ?? false,
     };
-
-    const baseFactor = meteora.baseFactor ?? DLMMManager.DEFAULT_BASE_FACTOR;
-    const feeBpsNumber =
-      meteora.feeBps ?? Math.floor((baseFactor * config.binStep) / 10000);
-
-    const maxFeeBps = Math.floor(
-      (DLMMManager.U16_MAX * config.binStep) / 10000
-    );
-    if (feeBpsNumber <= 0 || feeBpsNumber > maxFeeBps) {
-      throw new Error(
-        `Invalid Meteora feeBps: ${feeBpsNumber}. Max for binStep=${config.binStep} is ${maxFeeBps}.`
-      );
-    }
 
     const feeBps = new BN(feeBpsNumber);
 
@@ -242,7 +244,7 @@ export class DLMMManager implements LiquidityStrategy {
 
     let activationType =
       options.meteoraOptions?.activationType === "slot" ? 0 : 1;
-    let activationPoint: BN;
+    let activationPoint: BN | undefined;
     const activationDate =
       meteora.activationDate ?? options.meteoraOptions?.activationDate;
 
@@ -258,11 +260,10 @@ export class DLMMManager implements LiquidityStrategy {
     } else if (options.meteoraOptions?.activationPoint !== undefined) {
       activationPoint = new BN(options.meteoraOptions.activationPoint);
     } else {
-      activationType = 1;
-      activationPoint = new BN(Math.floor(Date.now() / 1000));
+      activationPoint = undefined;
     }
 
-    const createTx = await DLMM.createCustomizablePermissionlessLbPair(
+    const createTx = await DLMM.createCustomizablePermissionlessLbPair2(
       this.connection,
       new BN(config.binStep),
       tokenX,
@@ -274,7 +275,7 @@ export class DLMMManager implements LiquidityStrategy {
       this.wallet.publicKey,
       activationPoint,
       false,
-      { cluster: this.cluster, skipSolWrappingOperation: true }
+      { cluster: this.cluster }
     );
 
     const lfg = meteora.lfg;
@@ -309,12 +310,20 @@ export class DLMMManager implements LiquidityStrategy {
       lowerBinId = Math.min(minBinId, maxBinId);
       upperBinId = Math.max(minBinId, maxBinId);
     } else {
-      const width = config.width;
+      const width = Math.min(
+        config.width,
+        DLMMManager.DLMM_DEFAULT_BIN_PER_POSITION
+      );
       lowerBinId = activeId - Math.floor(width / 2);
       upperBinId = lowerBinId + width - 1;
     }
 
     const binCount = upperBinId - lowerBinId + 1;
+    if (binCount > DLMMManager.DLMM_DEFAULT_BIN_PER_POSITION) {
+      throw new Error(
+        `Meteora DLMM position width too large (${binCount}). Max supported is ${DLMMManager.DLMM_DEFAULT_BIN_PER_POSITION}. Reduce meteora.width or meteora.lfg range.`
+      );
+    }
     const shouldUseLfgWeights =
       hasLfg && binCount <= DLMMManager.MAX_LFG_BINS_SINGLE_TX;
 

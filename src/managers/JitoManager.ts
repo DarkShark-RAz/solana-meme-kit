@@ -83,4 +83,62 @@ export class JitoManager {
       throw error;
     }
   }
+
+  /**
+   * Sends a bundle that contains multiple transactions.
+   * The tip instruction is appended to the last transaction.
+   */
+  async sendBundleGroups(
+    instructionGroups: any[][], // TransactionInstruction[][]
+    tipSol: number = 0.001,
+    region?: BlockEngineRegion,
+    extraSigners: Keypair[] = []
+  ): Promise<string> {
+    if (region) this.setRegion(region);
+    Logger.info(`Preparing Jito Bundle with tip: ${tipSol} SOL`);
+
+    if (!Array.isArray(instructionGroups) || instructionGroups.length === 0) {
+      throw new Error("instructionGroups must be a non-empty array");
+    }
+
+    const tipAccount = getRandomTipAccount();
+    const tipLamports = Math.floor(tipSol * 1e9);
+
+    const { blockhash } = await this.connection.getLatestBlockhash("confirmed");
+
+    const txs = instructionGroups.map((group, idx) => {
+      const isLast = idx === instructionGroups.length - 1;
+      const groupInstructions = isLast
+        ? [
+            ...group,
+            SystemProgram.transfer({
+              fromPubkey: this.wallet.publicKey,
+              toPubkey: tipAccount as PublicKey,
+              lamports: tipLamports,
+            }),
+          ]
+        : group;
+
+      const messageV0 = new TransactionMessage({
+        payerKey: this.wallet.publicKey,
+        recentBlockhash: blockhash,
+        instructions: groupInstructions,
+      }).compileToV0Message();
+
+      const versionedTx = new VersionedTransaction(messageV0);
+      versionedTx.sign([this.wallet, ...extraSigners]);
+      return versionedTx;
+    });
+
+    const b = new Bundle(txs, 5);
+
+    try {
+      const bundleId = await this.client.sendBundle(b);
+      Logger.info(`Bundle submitted. ID: ${bundleId}`);
+      return bundleId;
+    } catch (error) {
+      Logger.error("Failed to send Jito bundle", error);
+      throw error;
+    }
+  }
 }

@@ -16,7 +16,9 @@ import DLMM, {
   deriveBinArray,
   deriveBinArrayBitmapExtension,
   deriveEventAuthority,
+  deriveOracle,
   deriveReserve,
+  MEMO_PROGRAM_ID,
   getBinArrayAccountMetasCoverage,
   getBinArrayIndexesCoverage,
   isOverflowDefaultBinArrayBitmap,
@@ -28,6 +30,7 @@ import BN from "bn.js";
 import { Logger } from "../../core/utils";
 import { LaunchStyles, MeteoraPresets } from "./presets";
 import {
+  createAssociatedTokenAccountIdempotentInstruction,
   createCloseAccountInstruction,
   createSyncNativeInstruction,
   getAssociatedTokenAddressSync,
@@ -148,6 +151,7 @@ export class DLMMManager implements LiquidityStrategy {
   ): Promise<{
     poolId: PublicKey;
     instructions: TransactionInstruction[];
+    instructionGroups?: TransactionInstruction[][];
     signers?: Keypair[];
   }> {
     Logger.info("Initializing Meteora DLMM Strategy...");
@@ -208,6 +212,7 @@ export class DLMMManager implements LiquidityStrategy {
       options.liquidity?.solAmount ?? options.solLiquidityAmount ?? 0;
     const tokenLiquidityAmount =
       options.liquidity?.tokenAmount ?? options.tokenLiquidityAmount ?? 0;
+    const buyAmountSol = options.liquidity?.buyAmountSol ?? 0;
 
     if (solLiquidityAmount <= 0 || tokenLiquidityAmount <= 0) {
       throw new Error(
@@ -318,24 +323,17 @@ export class DLMMManager implements LiquidityStrategy {
       new BN(upperBinId)
     );
 
-    const instructions: TransactionInstruction[] = [];
+    const instructionGroups: TransactionInstruction[][] = [];
+    const createGroup: TransactionInstruction[] = [];
+    const liquidityGroup: TransactionInstruction[] = [];
+    const swapGroup: TransactionInstruction[] = [];
 
-    instructions.push(...createTx.instructions);
+    createGroup.push(...createTx.instructions);
 
-    const binArrayPubkeys = binArrayIndexes.map((idx) => {
-      return deriveBinArray(poolPubkey, idx, this.programId)[0];
-    });
-
-    const binArrayAccounts = await this.connection.getMultipleAccountsInfo(
-      binArrayPubkeys,
-      "confirmed"
-    );
-
-    for (let i = 0; i < binArrayIndexes.length; i++) {
-      if (binArrayAccounts[i] !== null) continue;
-
-      const idx = binArrayIndexes[i]!;
-      const binArray = binArrayPubkeys[i]!;
+    // For a brand new pool, bin arrays won't exist yet. Build init instructions deterministically
+    // without relying on RPC state (important for atomic create+seed flows).
+    for (const idx of binArrayIndexes) {
+      const binArray = deriveBinArray(poolPubkey, idx, this.programId)[0];
       const ix = await program.methods
         .initializeBinArray(idx)
         .accountsPartial({
@@ -344,7 +342,7 @@ export class DLMMManager implements LiquidityStrategy {
           lbPair: poolPubkey,
         })
         .instruction();
-      instructions.push(ix);
+      createGroup.push(ix);
     }
 
     const positionKeypair = Keypair.generate();
@@ -358,7 +356,7 @@ export class DLMMManager implements LiquidityStrategy {
         rent: SYSVAR_RENT_PUBKEY,
       })
       .instruction();
-    instructions.push(initPositionIx);
+    createGroup.push(initPositionIx);
 
     const userTokenX = getAssociatedTokenAddressSync(
       tokenX,
@@ -367,6 +365,23 @@ export class DLMMManager implements LiquidityStrategy {
     const userTokenY = getAssociatedTokenAddressSync(
       tokenY,
       this.wallet.publicKey
+    );
+
+    createGroup.push(
+      createAssociatedTokenAccountIdempotentInstruction(
+        this.wallet.publicKey,
+        userTokenX,
+        this.wallet.publicKey,
+        tokenX
+      )
+    );
+    createGroup.push(
+      createAssociatedTokenAccountIdempotentInstruction(
+        this.wallet.publicKey,
+        userTokenY,
+        this.wallet.publicKey,
+        tokenY
+      )
     );
 
     const xDecimals = tokenX.equals(WSOL_MINT) ? 9 : options.decimals || 6;
@@ -387,14 +402,14 @@ export class DLMMManager implements LiquidityStrategy {
 
     const wsolCloseIxs: TransactionInstruction[] = [];
     if (tokenX.equals(WSOL_MINT) && xAmountLamports.gt(new BN(0))) {
-      instructions.push(
+      liquidityGroup.push(
         SystemProgram.transfer({
           fromPubkey: this.wallet.publicKey,
           toPubkey: userTokenX,
           lamports: Number(xAmountLamports.toString()),
         })
       );
-      instructions.push(createSyncNativeInstruction(userTokenX));
+      liquidityGroup.push(createSyncNativeInstruction(userTokenX));
       wsolCloseIxs.push(
         createCloseAccountInstruction(
           userTokenX,
@@ -404,14 +419,14 @@ export class DLMMManager implements LiquidityStrategy {
       );
     }
     if (tokenY.equals(WSOL_MINT) && yAmountLamports.gt(new BN(0))) {
-      instructions.push(
+      liquidityGroup.push(
         SystemProgram.transfer({
           fromPubkey: this.wallet.publicKey,
           toPubkey: userTokenY,
           lamports: Number(yAmountLamports.toString()),
         })
       );
-      instructions.push(createSyncNativeInstruction(userTokenY));
+      liquidityGroup.push(createSyncNativeInstruction(userTokenY));
       wsolCloseIxs.push(
         createCloseAccountInstruction(
           userTokenY,
@@ -493,7 +508,7 @@ export class DLMMManager implements LiquidityStrategy {
         } as any)
         .remainingAccounts(binArrayAccountMetas)
         .instruction();
-      instructions.push(addLiquidityIx);
+      liquidityGroup.push(addLiquidityIx);
     } else {
       const strategyParameters = toStrategyParameters({
         minBinId: lowerBinId,
@@ -529,14 +544,76 @@ export class DLMMManager implements LiquidityStrategy {
         } as any)
         .remainingAccounts(binArrayAccountMetas)
         .instruction();
-      instructions.push(addLiquidityIx);
+      liquidityGroup.push(addLiquidityIx);
     }
 
-    instructions.push(...wsolCloseIxs);
+    if (buyAmountSol > 0) {
+      if (!Number.isFinite(buyAmountSol) || buyAmountSol <= 0) {
+        throw new Error("liquidity.buyAmountSol must be a finite number > 0");
+      }
+
+      const buyLamports = Math.floor(buyAmountSol * 1e9);
+      const buyAmountLamports = new BN(buyLamports);
+
+      const inToken = WSOL_MINT;
+      const outToken = mint;
+
+      const userTokenIn = inToken.equals(tokenX) ? userTokenX : userTokenY;
+      const userTokenOut = outToken.equals(tokenX) ? userTokenX : userTokenY;
+
+      // Top-up WSOL for the buy (we already wrapped enough for initial liquidity)
+      swapGroup.push(
+        SystemProgram.transfer({
+          fromPubkey: this.wallet.publicKey,
+          toPubkey: userTokenIn,
+          lamports: buyLamports,
+        })
+      );
+      swapGroup.push(createSyncNativeInstruction(userTokenIn));
+
+      const swapIx = await (program.methods as any)
+        .swap2(buyAmountLamports, new BN(0), { slices: [] })
+        .accountsPartial({
+          lbPair: poolPubkey,
+          reserveX,
+          reserveY,
+          tokenXMint: tokenX,
+          tokenYMint: tokenY,
+          tokenXProgram: TOKEN_PROGRAM_ID,
+          tokenYProgram: TOKEN_PROGRAM_ID,
+          user: this.wallet.publicKey,
+          userTokenIn,
+          userTokenOut,
+          binArrayBitmapExtension,
+          oracle: deriveOracle(poolPubkey, this.programId)[0],
+          hostFeeIn: null,
+          memoProgram: MEMO_PROGRAM_ID,
+        })
+        .remainingAccounts(binArrayAccountMetas)
+        .instruction();
+
+      swapGroup.push(swapIx);
+    }
+
+    // Close WSOL at the end of the last group that needs it.
+    if (buyAmountSol > 0) {
+      swapGroup.push(...wsolCloseIxs);
+    } else {
+      liquidityGroup.push(...wsolCloseIxs);
+    }
+
+    instructionGroups.push(createGroup);
+    instructionGroups.push(liquidityGroup);
+    if (swapGroup.length > 0) {
+      instructionGroups.push(swapGroup);
+    }
+
+    const instructions = instructionGroups.flat();
 
     return {
       poolId: poolPubkey,
       instructions,
+      instructionGroups,
       signers: [positionKeypair],
     };
   }

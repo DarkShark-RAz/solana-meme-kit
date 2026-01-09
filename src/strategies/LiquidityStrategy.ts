@@ -44,6 +44,7 @@ export interface LaunchOptions {
   liquidity?: {
     solAmount: number;
     tokenAmount: number;
+    buyAmountSol?: number;
   };
 
   // Strategy Config
@@ -75,6 +76,7 @@ export interface LiquidityStrategy {
   ): Promise<{
     poolId: PublicKey;
     instructions: TransactionInstruction[];
+    instructionGroups?: TransactionInstruction[][];
     signers?: Keypair[];
   }>;
 }

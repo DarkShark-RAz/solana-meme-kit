@@ -7,6 +7,7 @@ import {
 } from "@solana/web3.js";
 import bs58 from "bs58";
 import { MemeKit } from "../src/core/MemeKit";
+import { DLMMManager } from "../src/strategies/meteora";
 
 function baseLaunchOptions() {
   return {
@@ -67,6 +68,90 @@ describe("MemeKit.estimateLaunchCost", () => {
     });
 
     expect(cost).toBeCloseTo(0.15 + 1 + 0.01 + 0.005, 8);
+  });
+});
+
+describe("MemeKit.launch (devnet)", () => {
+  it("should skip Jito and use connection.sendTransaction even if jitoTip is provided", async () => {
+    const payer = Keypair.generate();
+    const pk = bs58.encode(payer.secretKey);
+
+    const kit = new MemeKit({
+      rpcUrl: "http://localhost:8899",
+      privateKey: pk,
+      network: "devnet",
+    });
+
+    const blockhash = Keypair.generate().publicKey.toBase58();
+    const lastValidBlockHeight = 123;
+    const signature = "devnet_sig";
+
+    let sendTransactionCalled = 0;
+    let sendBundleCalled = 0;
+
+    // Prevent any real RPC interactions
+    (kit as any).connection = {
+      getLatestBlockhash: async () => ({ blockhash, lastValidBlockHeight }),
+      sendTransaction: async () => {
+        sendTransactionCalled++;
+        return signature;
+      },
+      confirmTransaction: async () => ({ value: { err: null } }),
+    };
+
+    // Avoid real minting & authority revokes
+    (kit as any).tokenManager = {
+      createToken: async () => ({ mint: payer }),
+      revokeAuthorities: async () => {},
+    };
+
+    // Force the strategy to return a dummy instruction
+    (kit as any).liquidityManager = {};
+    (kit as any).marketManager = {};
+    (kit as any).jitoManager = {
+      sendBundle: async () => {
+        sendBundleCalled++;
+        return "bundle";
+      },
+    };
+
+    // Monkeypatch DLMMManager.initialize so MemeKit.launch doesn't touch RPC.
+    const dummyIx = SystemProgram.transfer({
+      fromPubkey: payer.publicKey,
+      toPubkey: payer.publicKey,
+      lamports: 1,
+    });
+
+    const dummyIx2 = SystemProgram.transfer({
+      fromPubkey: payer.publicKey,
+      toPubkey: payer.publicKey,
+      lamports: 2,
+    });
+
+    const originalInitialize = DLMMManager.prototype.initialize;
+    DLMMManager.prototype.initialize = async function () {
+      return {
+        poolId: payer.publicKey,
+        instructions: [dummyIx, dummyIx2],
+        instructionGroups: [[dummyIx], [dummyIx2]],
+        signers: [],
+      };
+    };
+
+    try {
+      const res = await kit.launch({
+        ...baseLaunchOptions(),
+        liquidity: { solAmount: 1, tokenAmount: 1 },
+        dex: "meteora",
+        jitoTip: 0.01,
+      } as any);
+
+      expect(res.signature).toBe(signature);
+      expect(sendTransactionCalled).toBe(2);
+      expect(sendBundleCalled).toBe(0);
+    } finally {
+      DLMMManager.prototype.initialize = originalInitialize;
+    }
   });
 });
 

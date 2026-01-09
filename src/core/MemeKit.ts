@@ -27,6 +27,7 @@ export class MemeKit {
   private connection: Connection;
   private wallet: Keypair;
   private cluster: "mainnet-beta" | "devnet";
+  private network: "mainnet-beta" | "devnet";
 
   public tokenManager: TokenManager;
   public marketManager: MarketManager;
@@ -37,9 +38,11 @@ export class MemeKit {
     rpcUrl: string;
     privateKey?: string;
     cluster?: "mainnet-beta" | "devnet";
+    network?: "mainnet-beta" | "devnet";
   }) {
     this.connection = new Connection(config.rpcUrl, "confirmed");
-    this.cluster = config.cluster || "mainnet-beta";
+    this.network = config.network ?? config.cluster ?? "mainnet-beta";
+    this.cluster = this.network;
 
     // Load wallet
     if (config.privateKey) {
@@ -229,10 +232,8 @@ export class MemeKit {
         throw new Error(`Unknown DEX strategy: ${dex}`);
     }
 
-    const { poolId, instructions, signers } = await strategy.initialize(
-      options,
-      mint.publicKey
-    );
+    const { poolId, instructions, instructionGroups, signers } =
+      await strategy.initialize(options, mint.publicKey);
     Logger.info(
       `Liquidity Setup Instructions Generated. Pool: ${poolId.toBase58()}`
     );
@@ -240,7 +241,48 @@ export class MemeKit {
     // 4. Send Transaction (Jito or Real SOL)
     let signature = "Dry-run (not sent)";
     if (instructions.length > 0) {
-      if (options.jitoTip !== undefined) {
+      const groups =
+        instructionGroups && instructionGroups.length > 0
+          ? instructionGroups
+          : [instructions];
+
+      if (this.network === "devnet") {
+        Logger.info("Running on Devnet. Jito Bundling skipped.");
+
+        try {
+          for (const group of groups) {
+            const recentBlockhash = await this.connection.getLatestBlockhash();
+            const messageV0 = new TransactionMessage({
+              payerKey: this.wallet.publicKey,
+              recentBlockhash: recentBlockhash.blockhash,
+              instructions: group,
+            }).compileToV0Message();
+
+            const versionedTx = new VersionedTransaction(messageV0);
+            versionedTx.sign([this.wallet, ...(signers ?? [])]);
+
+            Logger.info("Sending Liquidity Setup Transaction...");
+            signature = await this.connection.sendTransaction(versionedTx);
+            await this.connection.confirmTransaction(
+              {
+                signature,
+                blockhash: recentBlockhash.blockhash,
+                lastValidBlockHeight: recentBlockhash.lastValidBlockHeight,
+              },
+              "confirmed"
+            );
+            Logger.info(`Transaction Sent: ${signature}`);
+          }
+
+          Logger.info("Transaction Confirmed! ✓");
+          Logger.info(
+            `Explorer: ${getExplorerLink("tx", signature, this.cluster)}`
+          );
+        } catch (err: any) {
+          Logger.error(`Transaction failed: ${err.message}`);
+          signature = `Failed: ${err.message}`;
+        }
+      } else if (options.jitoTip !== undefined) {
         const tipSol =
           options.jitoTip === "auto"
             ? await getJitoTipFloor()
@@ -252,12 +294,20 @@ export class MemeKit {
 
         Logger.info(`Launching with Jito Bundle (Tip: ${tipSol} SOL)...`);
         try {
-          const bundleId = await this.jitoManager.sendBundle(
-            instructions,
-            tipSol,
-            options.blockEngine,
-            signers ?? []
-          );
+          const bundleId =
+            groups.length > 1
+              ? await this.jitoManager.sendBundleGroups(
+                  groups,
+                  tipSol,
+                  options.blockEngine,
+                  signers ?? []
+                )
+              : await this.jitoManager.sendBundle(
+                  instructions,
+                  tipSol,
+                  options.blockEngine,
+                  signers ?? []
+                );
           signature = bundleId;
           Logger.info(`Bundle Submitted: ${bundleId}`);
         } catch (err: any) {
